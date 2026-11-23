@@ -4,11 +4,12 @@ from __future__ import annotations
 import html
 import json
 import math
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,6 +22,19 @@ SESSION_OPEN = 9 * 60 + 30     # NYSE/Nasdaq regular session opens 09:30 ET
 MARKET_CLOSE = 16 * 60         # ...and closes 16:00 ET
 SQUARE_OFF = 15 * 60 + 45      # paper positions are flattened 15 minutes before the close
 MORNING_REFRESH = 9 * 60 + 45  # daily snapshot refresh, 15 minutes after the open
+
+# Exchange rules always run on New York time (that is what the market follows). DISPLAY_TZ is only how times are
+# shown to you: default Central Europe (CET/CEST). Change with e.g.  set DISPLAY_TZ=Asia/Kolkata
+DISPLAY_TZ = ZoneInfo(os.environ.get("DISPLAY_TZ", "Europe/Berlin"))
+
+# NYSE full-closure days and 13:00 ET early closes. VERIFY against nyse.com/markets/hours-calendars and extend yearly.
+HOLIDAYS = {
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03",
+    "2026-09-07", "2026-11-26", "2026-12-25",
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05",
+    "2027-09-06", "2027-11-25", "2027-12-24",
+}
+EARLY_CLOSE = {"2026-11-27", "2026-12-24", "2027-11-26"}
 
 CACHE_DIR = Path("/tmp/daybreak_quote_cache")
 
@@ -77,16 +91,55 @@ def et_parts(moment: datetime | None = None) -> dict:
     return {"day": moment.strftime("%Y-%m-%d"), "minutes": moment.hour * 60 + moment.minute, "weekday": moment.strftime("%a")}
 
 
+def is_trading_day(day: str) -> bool:
+    """day is 'YYYY-MM-DD' in ET. False for Saturdays, Sundays and NYSE holidays."""
+    return date.fromisoformat(day).weekday() < 5 and day not in HOLIDAYS
+
+
+def close_minutes(day: str) -> int:
+    return 13 * 60 if day in EARLY_CLOSE else MARKET_CLOSE
+
+
+def square_off_minutes(day: str) -> int:
+    return close_minutes(day) - 15
+
+
 def in_session(moment: datetime | None = None) -> bool:
     p = et_parts(moment)
-    return p["weekday"] not in ("Sat", "Sun") and SESSION_OPEN <= p["minutes"] < SQUARE_OFF
+    return is_trading_day(p["day"]) and SESSION_OPEN <= p["minutes"] < square_off_minutes(p["day"])
+
+
+def _close_dt(d: date) -> datetime:
+    mins = close_minutes(d.isoformat())
+    return datetime(d.year, d.month, d.day, mins // 60, mins % 60, tzinfo=MARKET_TZ)
 
 
 def news_window_start(now: datetime | None = None) -> datetime:
-    """The overnight window opens at the 16:00 ET close of the previous session."""
+    """The news window opens at the close of the last *completed* trading session.
+    Monday morning therefore reaches back to Friday's close (the whole weekend), and the day after a holiday
+    reaches back past it."""
     now = now or datetime.now(timezone.utc)
-    day = now.astimezone(MARKET_TZ).replace(hour=16, minute=0, second=0, microsecond=0)
-    return day - timedelta(days=1) if now < day else day
+    day = now.astimezone(MARKET_TZ).date()
+    if not (is_trading_day(day.isoformat()) and now >= _close_dt(day)):
+        day -= timedelta(days=1)
+        while not is_trading_day(day.isoformat()):
+            day -= timedelta(days=1)
+    return _close_dt(day)
+
+
+def local_time(moment: datetime, fmt: str = "%d %b %H:%M %Z") -> str:
+    return moment.astimezone(DISPLAY_TZ).strftime(fmt)
+
+
+def session_hours_local(day: str | None = None) -> str:
+    """e.g. '15:30–22:00 CET' for the given ET day (default: today). Shifts by an hour in the few weeks when US and
+    EU daylight-saving dates differ, and on early-close days."""
+    day = day or et_parts()["day"]
+    y, mo, d = map(int, day.split("-"))
+    def at(mins):
+        return datetime(y, mo, d, mins // 60, mins % 60, tzinfo=MARKET_TZ).astimezone(DISPLAY_TZ)
+    o, c = at(SESSION_OPEN), at(close_minutes(day))
+    return f"{o:%H:%M}–{c:%H:%M} {c:%Z}"
 
 
 def snapshot_due(snapshot: dict | None, now: datetime | None = None) -> bool:

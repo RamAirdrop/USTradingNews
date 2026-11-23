@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import streamlit as st
 
@@ -24,7 +24,7 @@ def secret(name: str, default=None):
         return default
 
 
-OFF_HOURS = str(secret("ALLOW_OFF_HOURS", os.environ.get("ALLOW_OFF_HOURS", "1"))).strip() == "1"
+OFF_HOURS = str(secret("ALLOW_OFF_HOURS", os.environ.get("ALLOW_OFF_HOURS", "0"))).strip() == "1"
 
 
 def usd(value) -> str:
@@ -38,7 +38,8 @@ def signed(value) -> str:
 
 
 def et_time(iso: str) -> str:
-    return datetime.fromisoformat(iso).astimezone(market.MARKET_TZ).strftime("%d %b %H:%M")
+    """Shown in DISPLAY_TZ (default CET/CEST) with the zone label, e.g. '23 Nov 15:30 CET'."""
+    return market.local_time(datetime.fromisoformat(iso))
 
 
 # ------------------------------------------------------------ market snapshot
@@ -221,7 +222,7 @@ def render_stock(stock: dict, user: dict | None, idx: int) -> None:
             st.caption("Mixed/neutral news or no price history: no directional setup.")
         with st.expander("Source headlines"):
             for a in stock["news"]:
-                st.markdown(f"- [{a['title']}]({a['url']}) — {a['source']}, {et_time(a['publishedAt'])} ET ({a['label']})")
+                st.markdown(f"- [{a['title']}]({a['url']}) — {a['source']}, {et_time(a['publishedAt'])} ({a['label']})")
         if sc:
             with st.expander("📈 Paper trade this signal"):
                 if not user:
@@ -307,7 +308,7 @@ def render_portfolio(user: dict | None) -> None:
         st.caption("No completed days yet.")
     st.subheader("Closed trades")
     if s["trades"]:
-        st.dataframe([{"Closed (ET)": et_time(t["closedAt"]), "Stock": t["symbol"], "Side": t["side"], "Qty": t["qty"], "Entry": usd(t["entry"]),
+        st.dataframe([{"Closed": et_time(t["closedAt"]), "Stock": t["symbol"], "Side": t["side"], "Qty": t["qty"], "Entry": usd(t["entry"]),
                        "Exit": usd(t["exit"]), "Reason": t["reason"], "P/L": f"{signed(t['pnl'])} ({t['pnlPct']:+.2f}%)"} for t in s["trades"]], hide_index=True, use_container_width=True)
     else:
         st.caption("No closed trades yet.")
@@ -327,7 +328,7 @@ def render_news(snapshot: dict | None) -> None:
     for src in snapshot["sources"]:
         st.caption(f"{src['name']}: {src['count']} today" if src["status"] == "ok" else f"{src['name']}: unavailable ({src.get('error')})")
     for a in snapshot["articles"]:
-        st.markdown(f"**{a['label']}** · [{a['title']}]({a['url']}) — {a['source']}, {et_time(a['publishedAt'])} ET")
+        st.markdown(f"**{a['label']}** · [{a['title']}]({a['url']}) — {a['source']}, {et_time(a['publishedAt'])}")
 
 
 ABOUT = """
@@ -355,7 +356,12 @@ if st.sidebar.button("↻ Refresh data"):
 if state["last_error"]:
     st.sidebar.warning(f"Refresh issue: {state['last_error']}")
 if state["snapshot"]:
-    st.sidebar.caption(f"Updated {et_time(state['snapshot']['updatedAt'])} ET · auto-refresh after 09:45 ET")
+    st.sidebar.caption(f"Updated {et_time(state['snapshot']['updatedAt'])} · auto-refresh after 09:45 ET")
+    _day = market.et_parts()["day"]
+    st.sidebar.caption(f"US session today: {market.session_hours_local()}" if market.is_trading_day(_day)
+                       else "US market closed today (weekend/holiday). Next session: " + market.session_hours_local(
+                           next(str(date.fromisoformat(_day) + timedelta(days=i)) for i in range(1, 8)
+                                if market.is_trading_day(str(date.fromisoformat(_day) + timedelta(days=i))))))
     for err in state["snapshot"].get("errors", [])[:5]:
         st.sidebar.caption(f"⚠ {err}")
 

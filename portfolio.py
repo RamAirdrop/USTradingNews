@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
-from market import MARKET_TZ, SESSION_OPEN, SQUARE_OFF, et_parts
+from market import MARKET_TZ, SESSION_OPEN, et_parts, is_trading_day, session_hours_local, square_off_minutes
 
 START_CAPITAL = 1000.0  # US$
 
@@ -45,8 +45,9 @@ def open_position(p: dict, *, symbol: str, name: str, side: str, price: float, r
     """Size from the current balance so realised profits compound into the next trade (and losses shrink it)."""
     now = now or datetime.now(timezone.utc)
     parts = et_parts(now)
-    if not off_hours and not (parts["weekday"] not in ("Sat", "Sun") and SESSION_OPEN <= parts["minutes"] < SQUARE_OFF):
-        raise ValueError("New paper trades are only allowed 09:30–15:45 ET on weekdays.")
+    if not off_hours and not (is_trading_day(parts["day"]) and SESSION_OPEN <= parts["minutes"] < square_off_minutes(parts["day"])):
+        raise ValueError(f"New paper trades are only allowed 09:30–15:45 ET on US trading days (today's window: {session_hours_local()}; "
+                         "closed on weekends and NYSE holidays).")
     if side not in ("LONG", "SHORT"):
         raise ValueError("Invalid trade side.")
     if not price or price <= 0 or not risk or risk <= 0:
@@ -103,7 +104,7 @@ def replay(position: dict, candles: list[dict], now: datetime, off_hours: bool =
             continue
         last_price, last_time = c["close"], c["time"]
         cp = et_parts(c["time"])
-        if cp["day"] != position["day"] or cp["minutes"] >= SQUARE_OFF:
+        if cp["day"] != position["day"] or cp["minutes"] >= square_off_minutes(cp["day"]):
             continue
         stop_hit = c["low"] <= position["stop"] if long else c["high"] >= position["stop"]
         target_hit = c["high"] >= position["target"] if long else c["low"] <= position["target"]
@@ -114,9 +115,10 @@ def replay(position: dict, candles: list[dict], now: datetime, off_hours: bool =
             return {"price": position["target"], "reason": "Target hit", "at": c["time"]}, last_price, last_time
         session_close = c["close"]
     today = et_parts(now)
-    due = position["day"] < today["day"] or (not off_hours and today["minutes"] >= SQUARE_OFF)
+    due = position["day"] < today["day"] or (not off_hours and today["minutes"] >= square_off_minutes(today["day"]))
     if due:
-        square_off_time = datetime.fromisoformat(position["day"] + f"T{SQUARE_OFF // 60:02d}:{SQUARE_OFF % 60:02d}:00").replace(tzinfo=MARKET_TZ)
+        so = square_off_minutes(position["day"])
+        square_off_time = datetime.fromisoformat(position["day"] + f"T{so // 60:02d}:{so % 60:02d}:00").replace(tzinfo=MARKET_TZ)
         price = session_close or last_price or position["lastPrice"]
         return {"price": price, "reason": "End of day square-off", "at": square_off_time}, last_price, last_time
     return None, last_price, last_time

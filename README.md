@@ -1,6 +1,6 @@
 # Daybreak (Streamlit, Python): US stocks edition
 
-US large-cap news signals plus a paper-trading portfolio (starts at $1,000, fractional shares allowed; stop/target/15:45 ET square-off; P/L compounds). Market hours are 09:30–16:00 ET (about 19:00–01:30 IST during US daylight time, 20:00–02:30 IST otherwise). Simulated only, not advice.
+US large-cap news signals plus a paper-trading portfolio (starts at $1,000, fractional shares allowed; stop/target/15:45 ET square-off; P/L compounds). Market hours are 09:30–16:00 ET, which is 15:30–22:00 CET (14:30–21:00 CET for the ~1 week in Mar and ~3 weeks in Oct/Nov when US and EU clocks change on different dates). Rules run on New York time; times are *shown* in `DISPLAY_TZ` (default `Europe/Berlin`). Weekends and NYSE holidays (list in `market.py`, verify yearly) are non-trading days; the overnight news window reaches back to the last completed session's close, so Monday covers the whole weekend. Simulated only, not advice.
 
 ## Run
 ```
@@ -8,7 +8,7 @@ pip install -r requirements.txt
 streamlit run app.py
 python -m pytest
 ```
-`ALLOW_OFF_HOURS=1` lets you paper-trade outside market hours (demo).
+`ALLOW_OFF_HOURS=1` lets you paper-trade outside market hours (demo; default is off).
 
 ## Sign-in
 - Username/password: built in (scrypt, lockout). Enable sign-up with `allow_registration = true` in secrets.
